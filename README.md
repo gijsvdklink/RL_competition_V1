@@ -45,16 +45,17 @@ torch is pinned to 2.2.2, the last release with Intel-Mac wheels.
 
 ## Train
 
-Run everything from this folder. A decision is taken every 5 s, with a rollout of 1000
-decisions per env.
-- **Default schedule:** 10 epochs, minibatches of 512.
-- **Adjusted schedule:** 30 epochs, the whole buffer as one batch.
+Run everything from this folder. One update schedule, as in the thesis:
+- one environment;
+- a decision every 5 s;
+- a rollout buffer of 1000 samples: 1000 decisions for PPO, 100 decisions of each of the 10
+  aircraft for MAPPO;
+- the whole rollout as one batch;
+- 30 epochs.
 
 ```bash
-python -m single_agent.Training.train --env 2d --steps 1e6 --name ppo_default
-python -m single_agent.Training.train --env 2d --steps 1e6 --n-epochs 30 --batch-size full --name ppo_adjusted
-python -m multi_agent.Training.train  --env 2d --steps 5e6 --name mappo_default
-python -m multi_agent.Training.train  --env 2d --steps 5e6 --n-epochs 30 --batch-size full --name mappo_adjusted
+python -m single_agent.Training.train --env 2d --steps 1e6 --name ppo
+python -m multi_agent.Training.train  --env 2d --steps 5e6 --name mappo
 python -m tensorboard.main --logdir Models --port 6006
 ```
 
@@ -66,9 +67,9 @@ TensorBoard shows three groups:
 ## Evaluate and record
 
 ```bash
-python -m single_agent.Validation.evaluate --model Models/sa/ppo_default/best_model.zip      # official harness, BlueSky
-python -m single_agent.Validation.evaluate --model Models/sa/ppo_default/best_model.zip --env 2d --episodes 100
-python -m single_agent.Visualisation.visualise --model Models/sa/ppo_default/best_model.zip --seeds 1 2 3 4 5
+python -m single_agent.Validation.evaluate --model Models/sa/ppo/best_model.zip      # official harness, BlueSky
+python -m single_agent.Validation.evaluate --model Models/sa/ppo/best_model.zip --env 2d --episodes 100
+python -m single_agent.Visualisation.visualise --model Models/sa/ppo/best_model.zip --seeds 1 2 3 4 5
 ```
 
 For the multi-agent model, use the `multi_agent.` modules and a model under `Models/ma/`.

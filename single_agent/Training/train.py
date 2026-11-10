@@ -3,13 +3,12 @@
 The network is the one the multi-agent trainer uses (Shared/policy.py). The actor flies on
 the agent's own observation (navigation-mappo-rl's encoder, then a two-layer head of
 --net-width, 128 by default). The critic adds attention over the true states of the agent and
-its 10 intruders, which it reads in training only. Each env runs in its own process. The
+its 10 intruders, which it reads in training only. The
 settings, KPIs and outputs are in Shared/training.py.
 
 Run from competition-rl/:
 
-    python -m single_agent.Training.train --steps 1e6 --name ppo_default
-    python -m single_agent.Training.train --steps 1e6 --n-epochs 30 --batch-size full --name ppo_adjusted
+    python -m single_agent.Training.train --steps 1e6 --name ppo
 """
 
 from functools import partial
@@ -44,10 +43,9 @@ def validation(env_kind, cfg):
 
 
 def main():
-    args = parse_args(__doc__, default_steps=1e6, default_envs=8)
+    args = parse_args(__doc__, default_steps=1e6)
     cfg = run_config(args)
-    venv = SubprocVecEnv([partial(make_env, args.env, cfg) for _ in range(args.n_envs)],
-                         start_method='spawn')
+    venv = SubprocVecEnv([partial(make_env, args.env, cfg)], start_method='spawn')
     policy_kwargs = dict(
         features_extractor_class=CTDEFeatures,
         features_extractor_kwargs=dict(n_rays=cfg['n_rays'], history_length=cfg['history_length']),

@@ -1,13 +1,17 @@
 """What both trainers share: the PPO settings, the command line, and the TensorBoard KPIs.
 
-Both train with Stable-Baselines3 PPO, on the surrogate by default (--env 2d). VecNormalize
-scales the reward only: the observation is normalised by construction, and the -100
+Both train with Stable-Baselines3 PPO, on the surrogate by default (--env 2d), with one update
+schedule, as in the thesis:
+
+    one environment       in its own process: the evaluation environment lives in the main
+                          one, and BlueSky can only run once per process
+    rollout of 1000       samples: 1000 decisions of the single agent, or 100 decisions of
+                          each of the 10 aircraft in the multi-agent env
+    batch = the rollout   the whole rollout buffer is one batch
+    30 epochs             so 30 gradient steps per rollout
+
+VecNormalize scales the reward only: the observation is normalised by construction, and the
 loss-of-separation penalty would otherwise dominate the value loss.
-
-Update schedules, both with a rollout of 1000 decision steps per env:
-
-    default   10 epochs, minibatches of 512
-    adjusted  30 epochs, the whole rollout buffer as one batch (--batch-size full)
 
 TensorBoard, under Models/<sa|ma>/<run>/:
 
@@ -37,9 +41,7 @@ from Shared.metrics import METRIC_KEYS
 
 SETTINGS = {
     'learning_rate':   3e-4,
-    'n_steps':         1000,       # decision steps per env per rollout
-    'batch_size':      512,
-    'n_epochs':        10,
+    'n_epochs':        30,
     'gamma':           0.99,
     'gae_lambda':      0.95,
     'clip_range':      0.2,
@@ -48,6 +50,7 @@ SETTINGS = {
     'max_grad_norm':   0.5,
 }
 
+ROLLOUT_SAMPLES = 1000             # the rollout buffer, and the batch
 SAVE_EVERY      = 500_000          # steps
 EVAL_EVERY      = 100_000          # steps
 EVAL_EPISODES   = 20
@@ -55,17 +58,12 @@ VALIDATION_SEED = 7                # the eval/* scenarios; the competition score
 TRAINING_SEEDS  = 10_000           # run --seed s trains on seeds 10_000 (s + 1) + env index
 
 
-def parse_args(doc, default_steps, default_envs):
+def parse_args(doc, default_steps):
     parser = argparse.ArgumentParser(description=doc, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--env', choices=['2d', 'bluesky'], default='2d')
     parser.add_argument('--decision-step', type=int, default=CONFIG['action_frequency'], help='seconds')
     parser.add_argument('--history-stride', type=int, default=CONFIG['history_stride_s'], help='seconds')
     parser.add_argument('--steps', type=float, default=default_steps)
-    parser.add_argument('--n-envs', type=int, default=default_envs)
-    parser.add_argument('--n-steps', type=int, default=SETTINGS['n_steps'], help='rollout per env')
-    parser.add_argument('--n-epochs', type=int, default=SETTINGS['n_epochs'])
-    parser.add_argument('--batch-size', default=SETTINGS['batch_size'],
-                        help="an int, or 'full' for the whole rollout buffer")
     parser.add_argument('--net-width', type=int, default=128, help='neurons per layer of the 2-layer heads')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--name', default=None)
@@ -93,9 +91,7 @@ def train(kind, args, cfg, venv, policy, policy_kwargs, evaluate):
     """Train one run: kind is 'sa' or 'ma', venv the un-normalised VecEnv, evaluate(model, n)
     returns a dict of KPIs over n validation episodes."""
     torch.set_num_threads(2)
-    full = args.batch_size == 'full'
-    settings = {**SETTINGS, 'n_steps': args.n_steps, 'n_epochs': args.n_epochs,
-                'batch_size': args.n_steps * venv.num_envs if full else int(args.batch_size)}
+    settings = {**SETTINGS, 'n_steps': ROLLOUT_SAMPLES // venv.num_envs, 'batch_size': ROLLOUT_SAMPLES}
     run_dir = Path('Models') / kind / (args.name or f'{args.env}_seed{args.seed}')
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -111,7 +107,7 @@ def train(kind, args, cfg, venv, policy, policy_kwargs, evaluate):
     venv.seed(TRAINING_SEEDS * (args.seed + 1) + model.num_timesteps)
     used = {key: getattr(model, key) for key in ('n_steps', 'batch_size', 'n_epochs')}
     (run_dir / 'config.json').write_text(json.dumps(
-        {'cfg': cfg, 'settings': {**settings, **used}, 'n_envs': args.n_envs, 'env': args.env}, indent=2))
+        {'cfg': cfg, 'settings': {**settings, **used}, 'env': args.env}, indent=2))
 
     callbacks = [CheckpointCallback(max(1, SAVE_EVERY // venv.num_envs), str(run_dir / 'checkpoints'),
                                     save_vecnormalize=True),

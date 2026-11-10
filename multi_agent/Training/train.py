@@ -1,15 +1,13 @@
 """Train the multi-agent policy: MAPPO as Stable-Baselines3 PPO with parameter sharing.
 
-All 10 aircraft share one decentralised actor and one centralised critic
-(Shared/policy.py). Every aircraft of every env copy is a sub-env of
-ZooVecEnv (multi_agent/Training/vec_env.py), so --steps counts aircraft decisions, and
-n_steps is the rollout per aircraft slot. With 4 env copies that is 40 slots, a buffer of
-40,000 samples per rollout. The settings, KPIs and outputs are in Shared/training.py.
+All 10 aircraft share one decentralised actor and one centralised critic (Shared/policy.py).
+Every aircraft is a sub-env of ZooVecEnv (multi_agent/Training/vec_env.py), so --steps counts
+aircraft decisions, and a rollout of 100 decisions per aircraft fills the buffer of 1000.
+The settings, KPIs and outputs are in Shared/training.py.
 
 Run from competition-rl/:
 
-    python -m multi_agent.Training.train --steps 5e6 --name mappo_default
-    python -m multi_agent.Training.train --steps 5e6 --n-epochs 30 --batch-size full --name mappo_adjusted
+    python -m multi_agent.Training.train --steps 5e6 --name mappo
 """
 
 from functools import partial
@@ -53,9 +51,9 @@ def validation(env_kind, cfg):
 
 
 def main():
-    args = parse_args(__doc__, default_steps=5e6, default_envs=4)
+    args = parse_args(__doc__, default_steps=5e6)
     cfg = run_config(args)
-    venv = ZooVecEnv(partial(make_env, args.env, cfg), args.n_envs)
+    venv = ZooVecEnv(partial(make_env, args.env, cfg), n_envs=1)
     policy_kwargs = dict(
         features_extractor_class=CTDEFeatures,
         features_extractor_kwargs=dict(n_rays=cfg['n_rays'], history_length=cfg['history_length']),
