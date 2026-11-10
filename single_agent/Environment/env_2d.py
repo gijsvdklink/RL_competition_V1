@@ -42,7 +42,7 @@ class SurrogateCompetitionEnv(gym.Env):
         self.scenario_generator = ScenarioGenerator(
             n_obstacles=cfg['n_obstacles'], n_intruders=cfg['n_intruders'],
             agent_speed=cfg['ac_spd'], center=cfg['center'])
-        self.observation_space = self.observer.space()
+        self.observation_space = self.observer.space(1 + cfg['n_intruders'])
         self.action_space = spaces.Box(-1.0, 1.0, (2,), np.float64)
 
     def reset(self, seed=None, options=None):
@@ -96,7 +96,8 @@ class SurrogateCompetitionEnv(gym.Env):
         self.scoring.update(self.agent, t.lat[i], t.lon[i], self.goal, others, dt)
 
     def _get_obs(self):
-        return self.observer.observe([self.agent], self.traffic)[self.agent]
+        slots = [self.agent] + self.intruder_ids
+        return self.observer.observe_joint([self.agent], slots, self.traffic)[self.agent]
 
     def _get_info(self):
         return dict(self.metrics)

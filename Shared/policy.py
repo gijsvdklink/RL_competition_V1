@@ -1,13 +1,14 @@
-"""MAPPO's network in Stable-Baselines3: a decentralised actor with a centralised critic.
-
-All 10 aircraft share one actor and one critic (parameter sharing):
+"""The network of both trainers in Stable-Baselines3: a decentralised actor and a centralised
+critic, as navigation-mappo-rl's MAPPO. In the multi-agent env all 10 aircraft share one actor
+and one critic (parameter sharing). In the single-agent env the critic attends over the agent
+and its 10 intruders.
 
     actor   acts on the aircraft's own observation only: navigation-mappo-rl's encoder
             (Shared/encoder.py), then a tanh MLP (net_arch['pi'], 128-128 by default).
             This is all that runs at execution.
     critic  values the aircraft from its own observation (a second encoder) plus every
-            aircraft's state (Observer.joint). The aircraft's own token attends over all
-            tokens, as the repo's attention critic attends over all agents. Then a tanh MLP
+            aircraft's true state (Observer.observe_joint). The aircraft's own token attends
+            over all tokens, as the repo's attention critic attends over all agents. Then a tanh MLP
             (net_arch['vf']). It is used in training only.
 
 SB3 builds one features extractor and one MLP extractor. CTDEFeatures therefore returns

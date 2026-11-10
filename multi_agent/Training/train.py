@@ -1,7 +1,7 @@
 """Train the multi-agent policy: MAPPO as Stable-Baselines3 PPO with parameter sharing.
 
 All 10 aircraft share one decentralised actor and one centralised critic
-(multi_agent/Training/policy.py). Every aircraft of every env copy is a sub-env of
+(Shared/policy.py). Every aircraft of every env copy is a sub-env of
 ZooVecEnv (multi_agent/Training/vec_env.py), so --steps counts aircraft decisions, and
 n_steps is the rollout per aircraft slot. With 4 env copies that is 40 slots, a buffer of
 40,000 samples per rollout. The settings, KPIs and outputs are in Shared/training.py.
@@ -16,8 +16,8 @@ from functools import partial
 
 import numpy as np
 
+from Shared.policy import CTDEFeatures, CTDEPolicy
 from Shared.training import VALIDATION_SEED, kpi_means, parse_args, run_config, train
-from multi_agent.Training.policy import CTDEFeatures, CTDEPolicy
 from multi_agent.Training.vec_env import ZooVecEnv
 
 

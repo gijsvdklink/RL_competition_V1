@@ -19,15 +19,17 @@ which is the layout Shared/encoder.py unpacks. A stride of 10 s lets an intruder
 half the separation minimum across the stack, as far as an agent moved in the repo. The
 stride must be a whole number of decision steps.
 
-For the multi-agent critic, Observer.joint adds one token per agent slot. The critic only
-uses these in training (multi_agent/Training/policy.py); the actor never sees them. Each token holds
-JOINT_DIM values:
+For the centralised critic (Shared/policy.py), Observer.observe_joint adds one token per
+aircraft: per agent slot in the multi-agent env, and for the agent and its 10 intruders in
+the single-agent env. Only the critic reads them, in training; the actor never sees them.
+Each token holds JOINT_DIM values:
 
     0     alive        1 while the aircraft is flying
-    1     self         1 for the aircraft whose value is estimated (set by with_self)
-    2-10               the 9 state values of its newest snapshot
-    11-12              position north, east in the scenario frame / 100 NM
-    13-14              velocity north, east / v_max_tas
+    1     self         1 for the aircraft whose value is estimated
+    2-10               the 9 state values of its newest snapshot; 0 for an intruder,
+                       which has no goal
+    11-12              position north, east relative to the aircraft valued / 100 NM
+    13-14              velocity north, east relative to it / v_max_tas
 
 Both the surrogate and the BlueSky adapters hand a TrafficView of the same fields to the
 Observer, so a trained policy sees identical inputs in both.
@@ -66,10 +68,13 @@ def frame_dim(cfg):
 
 
 def with_self(tokens, slot):
-    """A copy of the joint tokens with slot k marked as the aircraft being valued."""
-    marked = tokens.copy()
-    marked[slot, 1] = 1.0
-    return marked
+    """The joint tokens as seen from one aircraft: it is marked as self, and every flying
+    aircraft's position and velocity are made relative to its own."""
+    view = tokens.copy()
+    view[slot, 1] = 1.0
+    flying = view[:, 0] > 0
+    view[flying, 11:15] -= tokens[slot, 11:15]
+    return view
 
 
 class Observer:
@@ -107,22 +112,21 @@ class Observer:
             observations[ac] = self._stack(ac, snapshot.astype(np.float32))
         return observations
 
-    def space(self, n_agents=None):
-        """The single-agent Box, or with n_agents the multi-agent Dict of 'own' and 'joint'."""
-        own = spaces.Box(-np.inf, np.inf, (self.size,), np.float32)
-        if n_agents is None:
-            return own
-        return spaces.Dict({'own': own,
-                            'joint': spaces.Box(-np.inf, np.inf, (n_agents, JOINT_DIM), np.float32)})
+    def space(self, n_aircraft):
+        """The Dict of the actor's 'own' observation and the critic's 'joint' tokens."""
+        return spaces.Dict({
+            'own': spaces.Box(-np.inf, np.inf, (self.size,), np.float32),
+            'joint': spaces.Box(-np.inf, np.inf, (n_aircraft, JOINT_DIM), np.float32)})
 
     def observe_joint(self, own_ids, slots, traffic):
-        """observe() for the multi-agent envs: each observation as {'own', 'joint'}."""
+        """Each own_id's observation as {'own', 'joint'}; slots lists every aircraft with a
+        token, in a fixed order."""
         own = self.observe(own_ids, traffic)
-        tokens = self.joint(slots, traffic)
+        tokens = self._joint(slots, traffic)
         return {ac: {'own': own[ac], 'joint': with_self(tokens, slots.index(ac))} for ac in own_ids}
 
-    def joint(self, slots, traffic):
-        """The critic's tokens, (len(slots), JOINT_DIM); zeros for slots that have left."""
+    def _joint(self, slots, traffic):
+        """One token per slot, (len(slots), JOINT_DIM); zeros for aircraft not flying."""
         tokens = np.zeros((len(slots), JOINT_DIM), dtype=np.float32)
         pos_nm = to_local_nm(traffic.lat, traffic.lon, self.center)
         for k, ac in enumerate(slots):
@@ -131,8 +135,8 @@ class Observer:
             row = traffic.id.index(ac)
             hdg = np.radians(traffic.hdg[row])
             v = traffic.tas[row] / self.cfg['v_max_tas']
-            tokens[k] = [1.0, 0.0, *self._state(ac, row, traffic), *(pos_nm[row] / 100.0),
-                         v * np.cos(hdg), v * np.sin(hdg)]
+            state = self._state(ac, row, traffic) if ac in self.goals else np.zeros(STATE_DIM)
+            tokens[k] = [1.0, 0.0, *state, *(pos_nm[row] / 100.0), v * np.cos(hdg), v * np.sin(hdg)]
         return tokens
 
     def _state(self, ac, row, traffic):

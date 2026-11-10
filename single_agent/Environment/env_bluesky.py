@@ -31,7 +31,7 @@ class BlueSkyCompetitionEnv(CompetitionEnv):
                          action_frequency=cfg['action_frequency'])
         self.cfg = cfg
         self.observer = Observer(cfg)
-        self.observation_space = self.observer.space()
+        self.observation_space = self.observer.space(1 + self.n_intruders)
         self._new_episode = False
 
     def reset(self, seed=None, options=None):
@@ -43,7 +43,8 @@ class BlueSkyCompetitionEnv(CompetitionEnv):
             spec = self.scenario.agents[0]
             self.observer.reset(self.scenario, {ac_id: spec.start}, {ac_id: spec.goal})
             self._new_episode = False
-        return self.observer.observe([ac_id], bluesky_view())[ac_id]
+        slots = [ac_id] + self.intruder_ids
+        return self.observer.observe_joint([ac_id], slots, bluesky_view())[ac_id]
 
     def _get_reward(self, ac_id):
         i = bs.traf.id2idx(ac_id)

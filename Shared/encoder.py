@@ -4,14 +4,12 @@ The flat observation is history_length frames of [state | lidar]. It is split in
 - the state values of all frames go through an MLP;
 - the lidar becomes history_length * 3 channels over n_rays for a 1-D CNN.
 
-Both feature sets are joined and mixed by two dense layers. LidarFeatures wraps the encoder
-as a Stable-Baselines3 features extractor for single-agent PPO. The multi-agent policy uses
-two encoders, one for the actor and one for the critic (multi_agent/Training/policy.py).
+Both feature sets are joined and mixed by two dense layers. The policy (Shared/policy.py)
+uses two of these encoders: one for the actor and one for the critic.
 """
 
 import torch
 import torch.nn as nn
-from stable_baselines3.common.torch_layers import BaseFeaturesExtractor
 
 from Shared.observation import N_CHANNELS, STATE_DIM
 
@@ -51,12 +49,3 @@ class ObservationEncoder(nn.Module):
         lidar = frames[:, :, STATE_DIM:].reshape(observations.shape[0], -1, self.n_rays)
         return self.head(torch.cat([self.cnn(lidar), self.state_mlp(states)], dim=1))
 
-
-class LidarFeatures(BaseFeaturesExtractor):
-
-    def __init__(self, observation_space, n_rays, history_length, features_dim=256):
-        super().__init__(observation_space, features_dim)
-        self.encoder = ObservationEncoder(n_rays, history_length, features_dim)
-
-    def forward(self, observations):
-        return self.encoder(observations)

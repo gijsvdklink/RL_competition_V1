@@ -1,9 +1,10 @@
 """Train the single-agent policy with PPO (Stable-Baselines3).
 
-The network is navigation-mappo-rl's encoder (Shared/encoder.py), shared by two-layer policy
-and value heads (--net-width, 128 by default), as the repo shares it between its actor and
-critic. Each env runs in its own process. The settings, KPIs and outputs are in
-Shared/training.py.
+The network is the one the multi-agent trainer uses (Shared/policy.py). The actor flies on
+the agent's own observation (navigation-mappo-rl's encoder, then a two-layer head of
+--net-width, 128 by default). The critic adds attention over the true states of the agent and
+its 10 intruders, which it reads in training only. Each env runs in its own process. The
+settings, KPIs and outputs are in Shared/training.py.
 
 Run from competition-rl/:
 
@@ -15,7 +16,7 @@ from functools import partial
 
 from stable_baselines3.common.vec_env import SubprocVecEnv, VecMonitor
 
-from Shared.encoder import LidarFeatures
+from Shared.policy import CTDEFeatures, CTDEPolicy
 from Shared.training import VALIDATION_SEED, kpi_means, parse_args, run_config, train
 
 
@@ -49,11 +50,11 @@ def main():
                          start_method='spawn')
     venv.seed(1000 * args.seed)
     policy_kwargs = dict(
-        features_extractor_class=LidarFeatures,
+        features_extractor_class=CTDEFeatures,
         features_extractor_kwargs=dict(n_rays=cfg['n_rays'], history_length=cfg['history_length']),
         net_arch=dict(pi=[args.net_width] * 2, vf=[args.net_width] * 2),
     )
-    train('sa', args, cfg, VecMonitor(venv), 'MlpPolicy', policy_kwargs, validation(args.env, cfg))
+    train('sa', args, cfg, VecMonitor(venv), CTDEPolicy, policy_kwargs, validation(args.env, cfg))
 
 
 if __name__ == '__main__':

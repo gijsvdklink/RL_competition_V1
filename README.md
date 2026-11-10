@@ -7,6 +7,11 @@ The observation and network follow [navigation-mappo-rl](https://github.com/avbi
 - a state vector, extended with the commanded heading and the commanded speed;
 - 4 stacked snapshots.
 
+Both use the same network (`Shared/policy.py`), the MAPPO design of the repo:
+- a decentralised actor that flies on the aircraft's own observation;
+- a centralised critic that also attends over the true states of all other aircraft. In the
+  single-agent env those are the 10 intruders; in the multi-agent env, the other agents.
+
 Training runs on a fast 2D surrogate of BlueSky. It reproduces the competition's scenarios,
 actions and scoring, and has been validated against BlueSky. Evaluation runs on the official
 harness in BlueSky itself.
@@ -15,9 +20,9 @@ harness in BlueSky itself.
 
 | folder | contents |
 |---|---|
-| `Shared/` | config, surrogate traffic model, lidar, observation, reward, scoring copy, encoder, SB3 training loop |
+| `Shared/` | config, surrogate traffic model, lidar, observation, reward, scoring copy, encoder, policy, SB3 training loop |
 | `single_agent/` | surrogate and BlueSky environments, PPO training, evaluation, GIF recording |
-| `multi_agent/` | the same for 10 agents: SB3 PPO with a shared decentralised actor and a centralised attention critic |
+| `multi_agent/` | the same for 10 agents, with one policy shared by all aircraft |
 | `Validation/` | `calibrate_dynamics.py` (measures BlueSky's A320) and `validate_surrogate.py` (surrogate vs BlueSky) |
 | `Docs/` | the reward function |
 

@@ -31,7 +31,7 @@ def record_episode(env, env_kind, act, seed, cfg):
     goal = {env.agent: tuple(env.scenario.agents[0].goal)}
     frames, done, truncated, info = [], False, False, {}
     while not (done or truncated):
-        frames.append(renderer.frame(traffic_of(env, env_kind), [env.agent], goal, {env.agent: obs}))
+        frames.append(renderer.frame(traffic_of(env, env_kind), [env.agent], goal, {env.agent: obs['own']}))
         obs, _, done, truncated, info = env.step(act(obs))
     print(f'seed {seed}: ' + ', '.join(f'{k} {v:g}' for k, v in info.items()))
     return frames
