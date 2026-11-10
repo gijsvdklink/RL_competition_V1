@@ -1,0 +1,21 @@
+[project]
+name = "competition-rl"
+version = "0.1.0"
+description = "Lidar PPO / MAPPO agents for the BlueSky-Gym AI4REAL-NET competition"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "bluesky-gym",
+    "torch==2.2.2",              # last release with Intel-Mac wheels
+    "numpy<2",                   # torch 2.2.2 is built against numpy 1.x
+    "stable-baselines3>=2.4,<2.5",
+    "pettingzoo>=1.26.1",
+    "shapely>=2.1",
+    "matplotlib",
+    "tensorboard",
+]
+
+[tool.uv]
+package = false
+
+[tool.uv.sources]
+bluesky-gym = { path = "../bluesky-gym", editable = true }
