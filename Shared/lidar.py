@@ -1,30 +1,42 @@
-"""A three-channel range scan around each aircraft, the observation of navigation-mappo-rl.
+"""A four-channel scan around each aircraft: navigation-mappo-rl's lidar plus the goal.
 
 Every aircraft casts n_rays rays, spread over fov_deg and centred on its own heading, in
 the scenario's flat north/east NM frame. Each ray reports only the nearest thing it hits,
-in one of three channels:
+in one of the first three channels:
 
     0  restricted areas   the obstacle polygon edges
     1  sector boundary    the sector polygon edges
     2  other aircraft     discs of aircraft_radius_nm (2.5 NM, half the separation minimum)
 
 The value is (range - hit distance) / range: 0 for nothing within range, rising to 1 at
-contact. The other two channels of that ray are 0. The ray-segment and ray-circle tests are
-the vectorised ones from navigation-mappo-rl/nav/ray_intersection.py. The repo's goal
-channel is left out, so a goal no longer hides what lies behind it.
+contact. The other two of these channels are 0 for that ray. The ray-segment and ray-circle
+tests are the vectorised ones from navigation-mappo-rl/nav/ray_intersection.py.
+
+    3  goal               1 on the ray pointing at the goal, falling off as a Gaussian of
+                          goal_width_deg (10 deg, two rays) with the angle between ray and goal
+
+The goal channel shows the goal's direction at any distance; the goal is mostly beyond the
+40 NM range, and its distance is in the state vector. Sharing the ray axis with the hits lets
+the CNN see when an obstacle or aircraft lies between the aircraft and its goal. The repo cast
+its rays at the goal too, but never gave it a channel.
 """
 
 import numpy as np
 
+from Shared.geo import degto180
+
+N_CHANNELS = 4
+
 
 class Lidar:
 
-    def __init__(self, n_rays, fov_deg, range_nm, aircraft_radius_nm):
+    def __init__(self, n_rays, fov_deg, range_nm, aircraft_radius_nm, goal_width_deg):
         endpoint = fov_deg < 360.0
         self.offsets = np.radians(np.linspace(-fov_deg / 2, fov_deg / 2, n_rays, endpoint=endpoint))
         self.n_rays = n_rays
         self.range = range_nm
         self.radius = aircraft_radius_nm
+        self.goal_width = goal_width_deg
         self.edges = np.zeros((0, 4))
         self.n_obstacle_edges = 0
 
@@ -35,11 +47,12 @@ class Lidar:
         self.n_obstacle_edges = sum(len(e) for e in obstacle_edges)
         self.edges = np.concatenate(obstacle_edges + [_edges(sector_nm)])
 
-    def scan(self, pos_nm, hdg_deg, aircraft_nm, own_index):
-        """Scan from every row of pos_nm; returns (n_scanners, 3, n_rays) in [0, 1].
+    def scan(self, pos_nm, hdg_deg, aircraft_nm, own_index, goal_rel_deg):
+        """Scan from every row of pos_nm; returns (n_scanners, N_CHANNELS, n_rays) in [0, 1].
 
         aircraft_nm holds every aircraft that shows on the scan, own_index the row of each
-        scanner in it, so a scanner does not see itself.
+        scanner in it, so a scanner does not see itself. goal_rel_deg is the bearing of each
+        scanner's goal relative to its heading.
         """
         n = len(pos_nm)
         angles = (np.radians(hdg_deg)[:, None] + self.offsets[None, :]).ravel()
@@ -62,7 +75,12 @@ class Lidar:
         scan = np.zeros((3, n * self.n_rays))
         hit = np.isfinite(dist)
         scan[channel[hit], np.flatnonzero(hit)] = (self.range - dist[hit]) / self.range
-        return scan.reshape(3, n, self.n_rays).transpose(1, 0, 2)
+        hits_scan = scan.reshape(3, n, self.n_rays).transpose(1, 0, 2)
+        return np.concatenate([hits_scan, self._goal(goal_rel_deg)[:, None, :]], axis=1)
+
+    def _goal(self, goal_rel_deg):
+        off_goal = degto180(np.degrees(self.offsets)[None, :] - np.asarray(goal_rel_deg)[:, None])
+        return np.exp(-0.5 * (off_goal / self.goal_width) ** 2)
 
 
 def _edges(vertices):

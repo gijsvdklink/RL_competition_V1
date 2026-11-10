@@ -6,7 +6,8 @@ It draws what CompetitionEnv._draw_world draws:
 - the goals.
 
 On top of that come the lidar hits of every controlled aircraft, decoded from the newest
-snapshot of its observation and coloured by channel. The renderer reads a TrafficView, so
+snapshot of its observation and coloured by channel. The goal channel is not drawn; the goal
+itself is. The renderer reads a TrafficView, so
 the same code draws the surrogate and BlueSky.
 """
 
@@ -82,7 +83,7 @@ class Renderer:
         origin_nm = to_local_nm(traffic.lat[row], traffic.lon[row], self.scenario.center)
         angles = np.radians(traffic.hdg[row]) + self.offsets
         x0, y0 = self.projection.project(traffic.lat[row], traffic.lon[row])
-        for channel, ray in zip(*np.nonzero(scan)):
+        for channel, ray in zip(*np.nonzero(scan[:3])):
             dist = self.cfg['lidar_range_nm'] * (1.0 - scan[channel, ray])
             north, east = origin_nm + dist * np.array([np.cos(angles[ray]), np.sin(angles[ray])])
             lat, lon = self._to_latlon(north, east)

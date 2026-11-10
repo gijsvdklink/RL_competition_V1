@@ -55,7 +55,7 @@ def validation(env_kind, cfg):
 def main():
     args = parse_args(__doc__, default_steps=5e6, default_envs=4)
     cfg = run_config(args)
-    venv = ZooVecEnv(partial(make_env, args.env, cfg), args.n_envs, seed=1000 * args.seed)
+    venv = ZooVecEnv(partial(make_env, args.env, cfg), args.n_envs)
     policy_kwargs = dict(
         features_extractor_class=CTDEFeatures,
         features_extractor_kwargs=dict(n_rays=cfg['n_rays'], history_length=cfg['history_length']),

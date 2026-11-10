@@ -3,7 +3,8 @@
 This repository holds PPO (single-agent) and MAPPO (multi-agent) policies for the
 [BlueSky-Gym competition](https://github.com/TUDelft-CNS-ATM/bluesky-gym/blob/AI4REAL-NET-Competition/docs/competition/COMPETITION.md).
 The observation and network follow [navigation-mappo-rl](https://github.com/avbiswas/navigation-mappo-rl):
-- a 3-channel lidar (restricted areas, sector boundary, other aircraft);
+- a lidar with channels for restricted areas, the sector boundary and other aircraft, plus a
+  fourth channel that marks the direction of the goal;
 - a state vector, extended with the commanded heading and the commanded speed;
 - 4 stacked snapshots.
 

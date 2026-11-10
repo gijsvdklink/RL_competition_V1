@@ -2,7 +2,8 @@
 
 This is CompetitionEnv (bluesky_gym/envs/competition_env.py) with two changes:
 - BlueSky is replaced by Shared/traffic.py;
-- the MDP is ours: the lidar observation, the four-term reward, a decision every 5 s.
+- the MDP is ours: the lidar observation, the reward of Shared/reward.py, a decision
+  every 5 s.
 
 Everything else matches the competition, so the same seed gives the same episode, up to the
 surrogate's error:

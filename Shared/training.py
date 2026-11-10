@@ -51,7 +51,8 @@ SETTINGS = {
 SAVE_EVERY      = 500_000          # steps
 EVAL_EVERY      = 100_000          # steps
 EVAL_EPISODES   = 20
-VALIDATION_SEED = 7
+VALIDATION_SEED = 7                # the eval/* scenarios; the competition scores on seed 42
+TRAINING_SEEDS  = 10_000           # run --seed s trains on seeds 10_000 (s + 1) + env index
 
 
 def parse_args(doc, default_steps, default_envs):
@@ -68,7 +69,8 @@ def parse_args(doc, default_steps, default_envs):
     parser.add_argument('--net-width', type=int, default=128, help='neurons per layer of the 2-layer heads')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--name', default=None)
-    parser.add_argument('--resume', default=None, help='a .zip; its vecnormalize.pkl is read beside it')
+    parser.add_argument('--resume', default=None,
+                        help='a final, best or checkpoint .zip; its VecNormalize statistics are found beside it')
     return parser.parse_args()
 
 
@@ -83,7 +85,7 @@ def load_cfg(model_path):
         return CONFIG
     for folder in Path(model_path).parents[:2]:
         if (folder / 'config.json').exists():
-            return json.loads((folder / 'config.json').read_text())['cfg']
+            return {**CONFIG, **json.loads((folder / 'config.json').read_text())['cfg']}
     raise FileNotFoundError(f'no config.json beside {model_path}')
 
 
@@ -96,16 +98,20 @@ def train(kind, args, cfg, venv, policy, policy_kwargs, evaluate):
                 'batch_size': args.n_steps * venv.num_envs if full else int(args.batch_size)}
     run_dir = Path('Models') / kind / (args.name or f'{args.env}_seed{args.seed}')
     run_dir.mkdir(parents=True, exist_ok=True)
-    (run_dir / 'config.json').write_text(json.dumps(
-        {'cfg': cfg, 'settings': settings, 'n_envs': args.n_envs, 'env': args.env}, indent=2))
 
     if args.resume:
-        venv = VecNormalize.load(str(Path(args.resume).parent / 'vecnormalize.pkl'), venv)
+        venv = VecNormalize.load(str(_vecnormalize_path(args.resume)), venv)
         model = PPO.load(args.resume, venv, tensorboard_log=str(run_dir))
     else:
         venv = VecNormalize(venv, norm_obs=False, norm_reward=True, gamma=settings['gamma'])
         model = PPO(policy, venv, policy_kwargs=policy_kwargs, tensorboard_log=str(run_dir),
                     seed=args.seed, verbose=1, **settings)
+    # PPO seeds env i with --seed + i, which repeats across runs; give every env its own
+    # stream instead, moved on by the steps already trained so a resumed run sees new scenarios
+    venv.seed(TRAINING_SEEDS * (args.seed + 1) + model.num_timesteps)
+    used = {key: getattr(model, key) for key in ('n_steps', 'batch_size', 'n_epochs')}
+    (run_dir / 'config.json').write_text(json.dumps(
+        {'cfg': cfg, 'settings': {**settings, **used}, 'n_envs': args.n_envs, 'env': args.env}, indent=2))
 
     callbacks = [CheckpointCallback(max(1, SAVE_EVERY // venv.num_envs), str(run_dir / 'checkpoints'),
                                     save_vecnormalize=True),
@@ -115,6 +121,15 @@ def train(kind, args, cfg, venv, policy, policy_kwargs, evaluate):
     model.save(run_dir / 'final_model')
     venv.save(str(run_dir / 'vecnormalize.pkl'))
     venv.close()
+
+
+def _vecnormalize_path(model_path):
+    """The reward statistics of a saved model: rl_model_vecnormalize_<N>_steps.pkl for a
+    checkpoint, vecnormalize.pkl in the run folder for a final or best model."""
+    path = Path(model_path)
+    if path.name.startswith('rl_model_'):
+        return path.with_name(path.name.replace('rl_model_', 'rl_model_vecnormalize_')).with_suffix('.pkl')
+    return path.parent / 'vecnormalize.pkl'
 
 
 def kpi_means(records):
@@ -140,7 +155,10 @@ class EvaluationKPIs(BaseCallback):
     def __init__(self, evaluate, run_dir):
         super().__init__()
         self.evaluate, self.run_dir = evaluate, run_dir
-        self.next_eval, self.best = EVAL_EVERY, -np.inf
+        self.best = -np.inf
+
+    def _on_training_start(self):
+        self.next_eval = (self.model.num_timesteps // EVAL_EVERY + 1) * EVAL_EVERY
 
     def _on_step(self):
         if self.num_timesteps < self.next_eval:
@@ -152,4 +170,5 @@ class EvaluationKPIs(BaseCallback):
         if kpis['total_reward'] > self.best:
             self.best = kpis['total_reward']
             self.model.save(self.run_dir / 'best_model')
+            self.model.get_vec_normalize_env().save(str(self.run_dir / 'vecnormalize.pkl'))
         return True

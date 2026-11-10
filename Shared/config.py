@@ -29,14 +29,15 @@ CONFIG = {
     'n_rays':                 72,
     'fov_deg':                360.0,
     'lidar_range_nm':         40.0,
-    'aircraft_radius_nm':     2.5,            # half the separation: touching circles = LoS
+    'aircraft_radius_nm':     2.5,            # half the separation minimum
+    'goal_width_deg':         10.0,           # std of the goal channel's bump
     'goal_distance_norm_nm':  100.0,
     'v_max_tas':              165.6,          # TAS at the CAS ceiling of 163 m/s, at 350 m
 
     # --- reward -----------------------------------------------------------------------------
-    'w_los':                  100.0,
-    'w_restricted':           10.0,
-    'w_outside':              10.0,
-    'w_drift':                1.0,            # times (1 - cos drift): 0 heading for the goal
-    'w_time':                 0.1,            # per decision step
+    'w_los':                  100.0,          # per second per aircraft within 5 NM
+    'w_restricted':           10.0,           # per second in a restricted area
+    'w_outside':              10.0,           # per second outside the sector
+    'w_drift':                1.0,            # per second, times (1 - cos drift)
+    'w_time':                 0.1,            # per second
 }

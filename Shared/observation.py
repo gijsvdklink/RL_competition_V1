@@ -1,6 +1,6 @@
 """The observation: navigation-mappo-rl's state vector and lidar, plus the commanded state.
 
-One snapshot per aircraft and decision step, 9 + 3*n_rays values:
+One snapshot per aircraft and decision step, 9 + 4*n_rays values:
 
     0  progress       (start distance - distance) / start distance; 1 at the goal
     1  cos_angle      cos of the angle from the heading to the goal
@@ -12,7 +12,8 @@ One snapshot per aircraft and decision step, 9 + 3*n_rays values:
                       so the side of the goal must be visible.
     7  cmd_heading    (commanded - actual heading) / 180: where the turn still in progress ends
     8  cmd_speed      commanded CAS as TAS / v_max_tas: the speed once it has been reached
-    9...              lidar, channel-major: obstacles, boundary, aircraft (Shared/lidar.py)
+    9...              lidar, channel-major: obstacles, boundary, aircraft, goal
+                      (Shared/lidar.py)
 
 The policy sees history_length snapshots, history_stride_s seconds apart, oldest first,
 which is the layout Shared/encoder.py unpacks. A stride of 10 s lets an intruder move about
@@ -45,10 +46,9 @@ from core.tools import kwikqdrdist
 
 from Shared.aero import vcas2tas
 from Shared.geo import degto180, to_local_nm
-from Shared.lidar import Lidar
+from Shared.lidar import N_CHANNELS, Lidar
 
 STATE_DIM = 9
-N_CHANNELS = 3
 JOINT_DIM = 15
 
 
@@ -83,7 +83,7 @@ class Observer:
     def __init__(self, cfg):
         self.cfg = cfg
         self.lidar = Lidar(cfg['n_rays'], cfg['fov_deg'], cfg['lidar_range_nm'],
-                           cfg['aircraft_radius_nm'])
+                           cfg['aircraft_radius_nm'], cfg['goal_width_deg'])
         assert cfg['history_stride_s'] % cfg['action_frequency'] == 0, \
             'history_stride_s must be a whole number of decision steps'
         self.stride = cfg['history_stride_s'] // cfg['action_frequency']
@@ -105,7 +105,8 @@ class Observer:
         """Push a snapshot for each id in own_ids and return their stacked observations."""
         rows = [traffic.id.index(ac) for ac in own_ids]
         pos_nm = to_local_nm(traffic.lat, traffic.lon, self.center)
-        scans = self.lidar.scan(pos_nm[rows], traffic.hdg[rows], pos_nm, np.array(rows))
+        goal_rel = [self._goal(ac, row, traffic)[0] for ac, row in zip(own_ids, rows)]
+        scans = self.lidar.scan(pos_nm[rows], traffic.hdg[rows], pos_nm, np.array(rows), goal_rel)
         observations = {}
         for ac, row, scan in zip(own_ids, rows, scans):
             snapshot = np.concatenate([self._state(ac, row, traffic), scan.ravel()])
@@ -139,11 +140,15 @@ class Observer:
             tokens[k] = [1.0, 0.0, *state, *(pos_nm[row] / 100.0), v * np.cos(hdg), v * np.sin(hdg)]
         return tokens
 
+    def _goal(self, ac, row, traffic):
+        """The goal's bearing relative to the heading, in degrees, and its distance in NM."""
+        qdr, dist = kwikqdrdist(traffic.lat[row], traffic.lon[row], *self.goals[ac])
+        return degto180(qdr - traffic.hdg[row]), dist
+
     def _state(self, ac, row, traffic):
         cfg = self.cfg
-        goal_lat, goal_lon = self.goals[ac]
-        qdr, dist = kwikqdrdist(traffic.lat[row], traffic.lon[row], goal_lat, goal_lon)
-        rel = np.radians(degto180(qdr - traffic.hdg[row]))
+        rel_deg, dist = self._goal(ac, row, traffic)
+        rel = np.radians(rel_deg)
         cos_angle = np.cos(rel)
         speed_ratio = traffic.tas[row] / cfg['v_max_tas']
         cmd_tas = vcas2tas(traffic.cmd_cas[row], cfg['altitude_m'])

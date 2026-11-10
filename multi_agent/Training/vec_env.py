@@ -15,7 +15,9 @@ truncation. Here every slot keeps its own episode:
 - **after it has left,** until the whole env resets, it returns a zero observation, reward 0
   and done on every step. Each such step is then an episode of its own that SB3 does not log
   and whose value target is 0. SB3 has no sample mask, so these steps still enter the batch.
-  Their advantage is near zero, so their effect on the policy is small.
+  Their expected policy gradient is zero, but after SB3's advantage normalisation their
+  advantage is not, so they add noise. They also count toward --steps. With the
+  fly-straight policy they are about a quarter of all samples.
 
 An env whose last agent has left resets at once.
 """
@@ -28,7 +30,7 @@ from stable_baselines3.common.vec_env import VecEnv
 
 class ZooVecEnv(VecEnv):
 
-    def __init__(self, make_env, n_envs, seed=0):
+    def __init__(self, make_env, n_envs):
         ctx = mp.get_context('spawn')
         self.remotes, work_remotes = zip(*[ctx.Pipe() for _ in range(n_envs)])
         self.processes = [ctx.Process(target=_worker, args=(remote, make_env), daemon=True)
@@ -39,8 +41,14 @@ class ZooVecEnv(VecEnv):
             remote.close()
         self.remotes[0].send(('spaces', None))
         self.n_agents, observation_space, action_space = self.remotes[0].recv()
-        self.n_envs, self.seed_base = n_envs, seed
+        self.n_envs, self.seed_base = n_envs, 0
         super().__init__(n_envs * self.n_agents, observation_space, action_space)
+
+    def seed(self, seed=None):
+        """Env copy i resets with seed + i at the next reset; its agent slots share it."""
+        if seed is not None:
+            self.seed_base = seed
+        return [self.seed_base + i for i in range(self.n_envs)]
 
     def reset(self):
         for i, remote in enumerate(self.remotes):

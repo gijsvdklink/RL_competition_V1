@@ -48,7 +48,6 @@ def main():
     cfg = run_config(args)
     venv = SubprocVecEnv([partial(make_env, args.env, cfg) for _ in range(args.n_envs)],
                          start_method='spawn')
-    venv.seed(1000 * args.seed)
     policy_kwargs = dict(
         features_extractor_class=CTDEFeatures,
         features_extractor_kwargs=dict(n_rays=cfg['n_rays'], history_length=cfg['history_length']),

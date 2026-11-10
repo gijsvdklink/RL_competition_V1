@@ -8,18 +8,18 @@
 \section*{Reward function}
 
 \begin{equation}
-r_t = -\left( w_1 x_{1,t} + w_2 x_{2,t} + w_3 x_{3,t} + w_4 \left(1 - \cos \psi_t\right) + w_5 x_{5,t} \right)
+r_t = -\sum_{k=1}^{5} \left( w_1 x_{1,k} + w_2 x_{2,k} + w_3 x_{3,k} + w_4 \left(1 - \cos \psi_t\right) + w_5 \right)
 \end{equation}
 
-\noindent where, for decision step $t$ ($5$~s):
+\noindent where $k$ runs over the $5$ simulated seconds of decision step $t$, and:
 \begin{itemize}
-    \item $x_{1,t} \in \{0,1\}$ is $1$ if the aircraft has a loss of separation ($< 5$~NM), with $w_1 = 100$;
-    \item $x_{2,t} \in \{0,1\}$ is $1$ if the aircraft is inside a restricted area, with $w_2 = 10$;
-    \item $x_{3,t} \in \{0,1\}$ is $1$ if the aircraft is outside the sector, with $w_3 = 10$;
-    \item $\psi_t$ is the angle between the aircraft's heading and the bearing to its waypoint, with $w_4 = 1$;
-    \item $x_{5,t} = 1$ is a time penalty for every decision step, with $w_5 = 0.1$.
+    \item $x_{1,k}$ is the number of aircraft within $5$~NM in second $k$ (usually $0$ or $1$), with $w_1 = 100$;
+    \item $x_{2,k} \in \{0,1\}$ is $1$ if the aircraft is inside a restricted area in second $k$, with $w_2 = 10$;
+    \item $x_{3,k} \in \{0,1\}$ is $1$ if the aircraft is outside the sector in second $k$, with $w_3 = 10$;
+    \item $\psi_t$ is the angle between the aircraft's heading and the bearing to its waypoint at the end of the step, with $w_4 = 1$;
+    \item $w_5 = 0.1$ is a time penalty per second.
 \end{itemize}
 
-\noindent The term $1 - \cos \psi_t$ is $0$ when flying straight at the waypoint and $2$ when flying away from it. The time penalty makes a faster flight to the waypoint better. The reward is never positive.
+\noindent So five seconds in a loss of separation cost $500$ and five seconds in a restricted area $50$. The term $1 - \cos \psi_t$ is $0$ when flying straight at the waypoint and $2$ when flying away from it. If the waypoint is reached during a step, the sum runs only over the seconds flown. The reward is never positive.
 
 \end{document}
