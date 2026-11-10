@@ -13,12 +13,17 @@ contact. The other two of these channels are 0 for that ray. The ray-segment and
 tests are the vectorised ones from navigation-mappo-rl/nav/ray_intersection.py.
 
     3  goal               1 on the ray pointing at the goal, falling off as a Gaussian of
-                          goal_width_deg (10 deg, two rays) with the angle between ray and goal
+                          goal_width_deg (10 deg) with the angle between ray and goal
 
-The goal channel shows the goal's direction at any distance; the goal is mostly beyond the
-40 NM range, and its distance is in the state vector. Sharing the ray axis with the hits lets
-the CNN see when an obstacle or aircraft lies between the aircraft and its goal. The repo cast
-its rays at the goal too, but never gave it a channel.
+The range is 92 NM (170 km), the longest start-goal distance in the competition, so the
+goal and everything between the aircraft and its goal is in range for the whole flight. It is
+also the competition's own distance scale, and about 60% of the sector, as the repo's lidar
+covered about 60% of its world. The 120 rays are 3 deg apart, so an aircraft's 5 NM disc is
+hit by at least one ray out to the full range.
+
+The goal channel shows the goal's direction; its distance is in the state vector. Sharing
+the ray axis with the hits lets the CNN see when an obstacle or aircraft lies between the
+aircraft and its goal. The repo cast its rays at the goal too, but never gave it a channel.
 """
 
 import numpy as np

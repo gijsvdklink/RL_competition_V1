@@ -26,9 +26,9 @@ CONFIG = {
     # --- observation ------------------------------------------------------------------------
     'history_length':         4,              # snapshots stacked per observation
     'history_stride_s':       10,             # seconds between snapshots, a multiple of the above
-    'n_rays':                 72,
+    'n_rays':                 120,            # 3 deg apart: a 5 NM disc is hit out to full range
     'fov_deg':                360.0,
-    'lidar_range_nm':         40.0,
+    'lidar_range_nm':         92.0,           # 170 km, the longest start-goal distance
     'aircraft_radius_nm':     2.5,            # half the separation minimum
     'goal_width_deg':         10.0,           # std of the goal channel's bump
     'goal_distance_norm_nm':  100.0,
