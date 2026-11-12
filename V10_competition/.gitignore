@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+Models/
+Logs/
+Results/
+*.gif

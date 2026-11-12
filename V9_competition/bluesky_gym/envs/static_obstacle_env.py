@@ -1,0 +1,329 @@
+import numpy as np
+import bluesky as bs
+import bluesky_gym.envs.common.functions as fn
+
+import gymnasium as gym
+from gymnasium import spaces
+
+from core.observations import WaypointObservation, ObstacleObservation
+from core.rendering import (
+    PygameCanvas, TopDownProjection,
+    draw_aircraft, draw_waypoint, draw_polygon, RED_ORANGE,
+)
+from core.actions import HeadingAction, SpeedAction, combine_action_spaces
+
+DISTANCE_MARGIN = 5 # km
+
+REACH_REWARD = 1 # reach set waypoint
+DRIFT_PENALTY = -0.01
+RESTRICTED_AREA_INTRUSION_PENALTY = -5
+
+INTRUSION_DISTANCE = 5 # NM
+
+WAYPOINT_DISTANCE_MIN = 100 # KM
+WAYPOINT_DISTANCE_MAX = 170 # KM
+
+OBSTACLE_DISTANCE_MIN = 20 # KM
+OBSTACLE_DISTANCE_MAX = 150 # KM
+
+D_HEADING = 45 #degrees
+D_SPEED = 20/3 # kts (check)
+
+AC_SPD = 150 # kts
+ALTITUDE = 350 # In FL
+
+NM2KM = 1.852
+
+ACTION_FREQUENCY = 10
+
+NUM_OBSTACLES = 10
+NUM_WAYPOINTS = 1
+
+OBSTACLE_AREA_RANGE = (50, 1000) # In NM^2
+CENTER = (51.990426702297746, 4.376124857109851) # TU Delft AE Faculty coordinates
+
+MAX_DISTANCE = 350 # width of screen in km
+
+class StaticObstacleEnv(gym.Env):
+    """ 
+    Static Obstacle Conflict Resolution Environment
+
+    TODO:
+    - Investigate CNN and Lidar based observation
+    - Change rendering such that none-square screens are also possible
+    """
+    metadata = {"render_modes": ["rgb_array","human"], "render_fps": 120}
+
+    def __init__(self, render_mode=None):
+        self.window_width = 512 # pixels
+        self.window_height = 512 # pixels
+        self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
+
+        max_obstacle_radius = np.sqrt(OBSTACLE_AREA_RANGE[1] / np.pi)
+        self.waypoint_obs = WaypointObservation(n=NUM_WAYPOINTS, distance_norm=WAYPOINT_DISTANCE_MAX)
+        self.obstacle_obs = ObstacleObservation(n=NUM_OBSTACLES, distance_norm=WAYPOINT_DISTANCE_MAX, radius_norm=max_obstacle_radius)
+
+        self.observation_space = spaces.Dict({
+            **self.waypoint_obs.space(),
+            **self.obstacle_obs.space(),
+        })
+
+        self.agent = "KL001"
+
+        self.heading_action = HeadingAction(d_heading=D_HEADING)
+        self.speed_action = SpeedAction(d_speed=D_SPEED)
+        self.action_space = combine_action_spaces([self.heading_action, self.speed_action])
+
+        assert render_mode is None or render_mode in self.metadata["render_modes"]
+        self.render_mode = render_mode
+
+        # initialize bluesky as non-networked simulation node
+        if bs.sim is None:
+            bs.init(mode='sim', detached=True)
+
+        # set correct sim speed
+        bs.stack.stack('DT 1;FF')
+        
+        # variables for logging
+        self.total_reward = 0
+        self.waypoint_reached = 0
+        self.crashed = 0
+        self.average_drift = np.array([])
+
+        self.obstacle_names = []
+
+        self.pygame_canvas = PygameCanvas(self.window_width, self.window_height)
+        self.projection = TopDownProjection(
+            max_distance=MAX_DISTANCE, ref_lat=0, ref_lon=0,
+            window_size=(self.window_width, self.window_height),
+        )
+
+    def reset(self, seed=None, options=None):
+        super().reset(seed=seed) 
+        bs.traf.reset()
+
+        # reset logging variables 
+        self.total_reward = 0
+        self.waypoint_reached = 0
+        self.crashed = 0
+        self.average_drift = np.array([])
+
+        bs.traf.cre(self.agent,actype="A320",acspd=AC_SPD, acalt=ALTITUDE)
+
+        ac_idx = bs.traf.id2idx(self.agent)
+        self.projection.update_ref(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
+
+        self._generate_obstacles()
+        self._generate_waypoint()
+
+        self.initial_wpt_qdr, _ = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.wpt_lat[0], self.wpt_lon[0])
+        bs.traf.hdg[ac_idx] = self.initial_wpt_qdr
+        bs.traf.ap.trk[ac_idx] = self.initial_wpt_qdr
+
+        observation = self._get_obs()
+        info = self._get_info()
+
+        if self.render_mode == "human":
+            self._render_frame()
+
+        return observation, info
+    
+    def step(self, action):
+        self._get_action(action)
+
+        for i in range(ACTION_FREQUENCY):
+            bs.sim.step()
+            reward, done, terminated = self._get_reward()
+            if self.render_mode == "human":
+                self._render_frame()
+            if terminated or done:
+                observation = self._get_obs()
+                self.total_reward += reward
+                info = self._get_info()
+                return observation, reward, done, terminated, info
+
+        observation = self._get_obs()
+        self.total_reward += reward
+        info = self._get_info()
+
+        return observation, reward, done, terminated, info
+
+    def _generate_polygon(self, centre):
+        poly_area = np.random.randint(OBSTACLE_AREA_RANGE[0]*2, OBSTACLE_AREA_RANGE[1])
+        R = np.sqrt(poly_area/ np.pi)
+        p = [fn.random_point_on_circle(R) for _ in range(3)] # 3 random points to start building the polygon
+        p = fn.sort_points_clockwise(p)
+        p_area = fn.polygon_area(p)
+        
+        while p_area < OBSTACLE_AREA_RANGE[0]:
+            p.append(fn.random_point_on_circle(R))
+            p = fn.sort_points_clockwise(p)
+            p_area = fn.polygon_area(p)
+        
+        p = [fn.nm_to_latlong(centre, point) for point in p] # Convert to lat/long coordinateS
+        return p_area, p, R
+    
+    def _generate_obstacles(self):
+        # delete existing obstacles from previous episode in BlueSky
+        for name in self.obstacle_names:
+            bs.tools.areafilter.deleteArea(name)
+
+        self.obstacle_names = []
+        self.obstacle_vertices = []
+        self.obstacle_radius = []
+
+        self._generate_coordinates_centre_obstacles(num_obstacles = NUM_OBSTACLES)
+
+        for i in range(NUM_OBSTACLES):
+            centre_obst = (self.obstacle_centre_lat[i], self.obstacle_centre_lon[i])
+            _, p, R = self._generate_polygon(centre_obst)
+            
+            points = [coord for point in p for coord in point] # Flatten the list of points
+            poly_name = 'restricted_area_' + str(i+1)
+            bs.tools.areafilter.defineArea(poly_name, 'POLY', points)
+            self.obstacle_names.append(poly_name)
+
+            obstacle_vertices_coordinates = []
+            for k in range(0,len(points),2):
+                obstacle_vertices_coordinates.append([points[k], points[k+1]])
+            
+            self.obstacle_vertices.append(obstacle_vertices_coordinates)
+            self.obstacle_radius.append(R)
+
+    def _generate_waypoint(self, acid = 'KL001'):
+        # original _generate_waypoints function from horizotal_cr_env
+        self.wpt_lat = []
+        self.wpt_lon = []
+        self.wpt_reach = []
+
+        ac_idx = bs.traf.id2idx(acid)
+        check_inside_var = True
+        loop_counter = 0
+        while check_inside_var:
+            loop_counter += 1
+            wpt_dis_init = np.random.randint(WAYPOINT_DISTANCE_MIN, WAYPOINT_DISTANCE_MAX)
+            wpt_hdg_init = np.random.randint(0, 360)
+            wpt_lat, wpt_lon = fn.get_point_at_distance(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], wpt_dis_init, wpt_hdg_init)
+
+            inside_temp = []
+            for j in range(NUM_OBSTACLES):
+                inside_temp.append(bs.tools.areafilter.checkInside(self.obstacle_names[j], np.array([wpt_lat]), np.array([wpt_lon]), np.array([bs.traf.alt[ac_idx]]))[0])
+            check_inside_var = any(x == True for x in inside_temp)
+      
+            if loop_counter > 1000:
+                raise Exception("No waypoints can be generated outside the obstacles. Check the parameters of the obstacles in the definition of the scenario.")
+
+        self.wpt_lat.append(wpt_lat)
+        self.wpt_lon.append(wpt_lon)
+        self.wpt_reach.append(0)
+
+    def _generate_coordinates_centre_obstacles(self, num_obstacles = NUM_OBSTACLES):
+        self.obstacle_centre_lat = []
+        self.obstacle_centre_lon = []
+        
+        for i in range(num_obstacles):
+            obstacle_dis_from_reference = np.random.randint(OBSTACLE_DISTANCE_MIN, OBSTACLE_DISTANCE_MAX)
+            obstacle_hdg_from_reference = np.random.randint(0, 360)
+            ac_idx = bs.traf.id2idx(self.agent)
+
+            obstacle_centre_lat, obstacle_centre_lon = fn.get_point_at_distance(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], obstacle_dis_from_reference, obstacle_hdg_from_reference)    
+            self.obstacle_centre_lat.append(obstacle_centre_lat)
+            self.obstacle_centre_lon.append(obstacle_centre_lon)
+
+    def _get_obs(self):
+        ac_idx = bs.traf.id2idx(self.agent)
+
+        # raw values retained for _check_waypoint, _check_drift (approach C)
+        wpt_qdr, wpt_dis = bs.tools.geo.kwikqdrdist(
+            bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], self.wpt_lat[0], self.wpt_lon[0])
+        self.destination_waypoint_distance = [wpt_dis * NM2KM]
+        self.destination_waypoint_drift = [fn.bound_angle_positive_negative_180(bs.traf.hdg[ac_idx] - wpt_qdr)]
+
+        return {
+            **self.waypoint_obs.observe(self.agent, self.wpt_lat, self.wpt_lon),
+            **self.obstacle_obs.observe(self.agent, self.obstacle_centre_lat, self.obstacle_centre_lon, self.obstacle_radius),
+        }
+    
+    def _get_info(self):
+        return {
+            'total_reward': self.total_reward,
+            'waypoint_reached': self.waypoint_reached,
+            'crashed': self.crashed,
+            'average_drift': self.average_drift.mean()
+        }
+
+    def _get_reward(self):
+        reach_reward = self._check_waypoint()
+        drift_reward = self._check_drift()
+        intrusion_reward, intrusion_terminate = self._check_intrusion()
+        
+        total_reward = reach_reward + drift_reward + intrusion_reward
+        
+        done = 0
+        if self.wpt_reach[0] == 1:
+            done = 1
+        elif intrusion_terminate:
+            done = 1
+
+        # Always return truncated as False, as timelimit is managed outside
+        return total_reward, done, False
+    
+    def _check_waypoint(self):
+        reward = 0
+        index = 0
+        for distance in self.destination_waypoint_distance:
+            if distance < DISTANCE_MARGIN and self.wpt_reach[index] != 1:
+                self.waypoint_reached = 1
+                self.wpt_reach[index] = 1
+                reward += REACH_REWARD
+                index += 1
+            else:
+                reward += 0
+                index += 1
+        return reward
+
+    def _check_drift(self):
+        drift = abs(np.deg2rad(self.destination_waypoint_drift[0]))
+        self.average_drift = np.append(self.average_drift, drift)
+        return drift * DRIFT_PENALTY
+
+    def _check_intrusion(self):
+        ac_idx = bs.traf.id2idx(self.agent)
+        reward = 0
+        terminate = 0
+        for obs_idx in range(NUM_OBSTACLES):
+            if bs.tools.areafilter.checkInside(self.obstacle_names[obs_idx], np.array([bs.traf.lat[ac_idx]]), np.array([bs.traf.lon[ac_idx]]), np.array([bs.traf.alt[ac_idx]])):
+                reward += RESTRICTED_AREA_INTRUSION_PENALTY
+                self.crashed = 1
+                terminate = 1
+        return reward, terminate
+
+    def _get_action(self, action):
+        self.heading_action.execute(self.agent, action[0])
+        self.speed_action.execute(self.agent, action[1])
+
+    def _render_frame(self):
+        ac_idx = bs.traf.id2idx(self.agent)
+        canvas = self.pygame_canvas.begin_frame()
+
+        # Draw ownship
+        x, y = self.projection.project(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
+        draw_aircraft(canvas, x, y, bs.traf.hdg[ac_idx],
+                      body_km=8, heading_km=50, projection=self.projection,
+                      color=RED_ORANGE, body_width=5)
+
+        # Draw obstacles
+        for vertices in self.obstacle_vertices:
+            points = [self.projection.project(v[0], v[1]) for v in vertices]
+            draw_polygon(canvas, points)
+
+        # Draw waypoints
+        for lat, lon, reached in zip(self.wpt_lat, self.wpt_lon, self.wpt_reach):
+            wx, wy = self.projection.project(lat, lon)
+            draw_waypoint(canvas, wx, wy, DISTANCE_MARGIN, self.projection,
+                          reached=bool(reached))
+
+        self.pygame_canvas.end_frame(canvas)
+
+    def close(self):
+        bs.stack.stack('quit')

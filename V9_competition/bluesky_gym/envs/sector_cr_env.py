@@ -1,0 +1,316 @@
+import numpy as np
+import bluesky as bs
+import bluesky_gym.envs.common.functions as fn
+
+import gymnasium as gym
+from gymnasium import spaces
+
+from core.observations import DriftObservation, OwnAirspeedObservation, IntruderObservation
+from core.rendering import (
+    PygameCanvas, TopDownProjection,
+    draw_aircraft, draw_intruder, draw_polygon,
+)
+from core.actions import HeadingAction, SpeedAction, combine_action_spaces
+
+AC_DENSITY_RANGE = (0.003, 0.007) # In AC/NM^2
+AC_DENSITY_MU = 0.003 # In AC/NM^2
+AC_DENSITY_SIGMA = 0.001 # In AC/NM^2
+
+POLY_AREA_RANGE = (2400, 3750) # In NM^2
+CENTER = np.array([51.990426702297746, 4.376124857109851]) # TU Delft AE Faculty coordinates
+ALTITUDE = 350 # In FL
+
+# Aircraft parameters
+AC_SPD = 150
+AC_TYPE = "A320"
+
+# Conversion factors
+NM2KM = 1.852
+FL2M = 30.48
+
+INTRUSION_DISTANCE = 5 # NM
+
+# Model parameters
+ACTION_FREQUENCY = 5
+NUM_AC_STATE = 4
+DRIFT_PENALTY = -0.1
+INTRUSION_PENALTY = -1
+D_HEADING = 22.5 # deg
+D_VELOCITY = 20/3 # kts
+
+class SectorCREnv(gym.Env):
+    """ 
+    Sector Conflict Resolution Environment
+    """
+    metadata = {"render_modes": ["rgb_array","human"], "render_fps": 120}
+    
+    def __init__(self, render_mode=None, ac_density_mode="normal"):
+        self.window_width = 512
+        self.window_height = 512
+        self.window_size = (self.window_width, self.window_height) # Size of the rendered environment
+        self.density_mode = ac_density_mode
+        self.poly_name = 'airspace'
+
+        self.drift_obs = DriftObservation()
+        self.airspeed_obs = OwnAirspeedObservation(spd_mean=AC_SPD, spd_std=6.0)
+        self.intruder_obs = IntruderObservation(n=NUM_AC_STATE, sort_by="distance", frame="body")
+
+        self.observation_space = spaces.Dict({
+            **self.drift_obs.space(),
+            **self.airspeed_obs.space(),
+            **self.intruder_obs.space(),
+        })
+
+        self.agent = "KL001"
+
+        self.heading_action = HeadingAction(d_heading=D_HEADING)
+        self.speed_action = SpeedAction(d_speed=D_VELOCITY)
+        self.action_space = combine_action_spaces([self.heading_action, self.speed_action])
+
+        assert render_mode is None or render_mode in self.metadata["render_modes"]
+        self.render_mode = render_mode
+
+        # initialize bluesky as non-networked simulation node
+        if bs.sim is None:
+            bs.init(mode='sim', detached=True)
+
+        # set correct sim speed
+        bs.stack.stack('DT 1;FF')
+
+        # initialize values used for logging -> input in _get_info
+        self.total_reward = 0
+        self.total_intrusions = 0
+        self.average_drift = np.array([])
+
+        self.pygame_canvas = PygameCanvas(self.window_width, self.window_height)
+        self.projection = TopDownProjection(
+            max_distance=200, ref_lat=CENTER[0], ref_lon=CENTER[1],
+            window_size=(self.window_width, self.window_height),
+        )
+    
+    def reset(self, seed=None, options=None):
+        bs.traf.reset()
+        bs.tools.areafilter.deleteArea(self.poly_name)
+        super().reset(seed=seed)
+
+        self.total_reward = 0
+        self.total_intrusions = 0
+        self.average_drift = np.array([])
+       
+        self._generate_polygon() # Create airspace polygon
+
+        max_distance = max(
+            np.linalg.norm(p1 - p2)
+            for p1 in self.poly_points for p2 in self.poly_points
+        ) * NM2KM
+        self.projection = TopDownProjection(
+            max_distance=max_distance, ref_lat=CENTER[0], ref_lon=CENTER[1],
+            window_size=(self.window_width, self.window_height),
+        )
+        
+        if self.density_mode == "normal":
+            rand_density = np.random.normal(AC_DENSITY_MU, AC_DENSITY_SIGMA)
+            self.num_ac = int(max(np.ceil(rand_density * self.poly_area), NUM_AC_STATE+1)) # Get total number of AC in the airspace including agent (min = 3)
+        else:
+            rand_density = np.random.uniform(*AC_DENSITY_RANGE)
+            self.num_ac = int(max(np.ceil(rand_density * self.poly_area), NUM_AC_STATE+1)) # Get total number of AC in the airspace including agent (min = 3)
+        
+        self._generate_waypoints() # Create waypoints for aircraft
+        self._generate_ac() # Create aircraft in the airspace
+
+        observation = self._get_obs()
+
+        info = self._get_info()
+        
+        if self.render_mode == "human":
+            self._render_frame()
+
+        return observation, info
+    
+    def step(self, action):
+        self._get_action(action)
+        action_frequency = ACTION_FREQUENCY
+        for _ in range(action_frequency):
+            bs.sim.step()
+            if self.render_mode == "human":              
+                self._render_frame()
+        
+        observation = self._get_obs()     
+        reward = self._get_reward()
+        info = self._get_info()
+
+        # truncate instead of terminate to avoid aircraft learning to exit sector fast
+        truncate = self._check_inside_airspace()
+
+        return observation, reward, False, truncate, info
+    
+    def _check_inside_airspace(self):
+        ac_idx = bs.traf.id2idx(self.agent)
+        if bs.tools.areafilter.checkInside(self.poly_name, np.array([bs.traf.lat[ac_idx]]), np.array([bs.traf.lon[ac_idx]]), np.array([ALTITUDE*FL2M])):
+            return False
+        else:
+            return True
+
+    def _generate_polygon(self):
+        
+        R = np.sqrt(POLY_AREA_RANGE[1] / np.pi)
+        p = [fn.random_point_on_circle(R) for _ in range(3)] # 3 random points to start building the polygon
+        p = fn.sort_points_clockwise(p)
+        p_area = fn.polygon_area(p)
+        
+        while p_area < POLY_AREA_RANGE[0]:
+            p.append(fn.random_point_on_circle(R))
+            p = fn.sort_points_clockwise(p)
+            p_area = fn.polygon_area(p)
+        
+        self.poly_area = p_area
+        
+        self.poly_points = np.array(p) # Polygon vertices are saved in terms of NM
+        
+        p = [fn.nm_to_latlong(CENTER, point) for point in p] # Convert to lat/long coordinateS
+        
+        points = [coord for point in p for coord in point] # Flatten the list of points
+        bs.tools.areafilter.defineArea(self.poly_name, 'POLY', points)
+    
+    def _generate_waypoints(self):
+        
+        edges = []
+        perim_tot = 0
+        
+        for i in range(len(self.poly_points)):
+            p1 = np.array(self.poly_points[i])
+            p2 = np.array(self.poly_points[(i+1) % len(self.poly_points)]) # Ensure wrap-around
+            len_edge = fn.euclidean_distance(p1, p2)
+            edges.append((p1, p2, len_edge))
+            perim_tot += len_edge
+        
+        d_list = [np.random.uniform(0, perim_tot) for _ in range(self.num_ac)] # Each ac including agent is given a waypoint
+        d_list.sort()
+        
+        self.wpts = [] # In terms of NM
+        current_d = 0
+        
+        for d in d_list:
+            while d > current_d + edges[0][2]:
+                current_d += edges[0][2]
+                edges.pop(0)
+            
+            edge = edges[0]
+            frac = (d - current_d) / edge[2]
+            p = edge[0] + frac * (edge[1] - edge[0])
+            self.wpts.append(p)
+        
+    def _generate_ac(self) -> None:
+        
+        # Determine bounding box of airspace
+        min_x = min(self.poly_points[:, 0])
+        min_y = min(self.poly_points[:, 1])
+        max_x = max(self.poly_points[:, 0])
+        max_y = max(self.poly_points[:, 1])
+        
+        init_p_latlong = []
+        
+        while len(init_p_latlong) < self.num_ac:
+            p = np.array([np.random.uniform(min_x, max_x), np.random.uniform(min_y, max_y)])
+            p = fn.nm_to_latlong(CENTER, p)
+            if bs.tools.areafilter.checkInside(self.poly_name, np.array([p[0]]), np.array([p[1]]), np.array([ALTITUDE*FL2M])):
+                init_p_latlong.append(p)
+        
+        wpt_agent = fn.nm_to_latlong(CENTER, self.wpts[0])
+        init_pos_agent = init_p_latlong[0]
+        hdg_agent = fn.get_hdg(init_pos_agent, wpt_agent)
+        
+        # Actor AC is the only one that has ACTOR as acid
+        bs.traf.cre(self.agent, actype=AC_TYPE, aclat=init_pos_agent[0], aclon=init_pos_agent[1], achdg=hdg_agent, acspd=AC_SPD, acalt=ALTITUDE)
+        
+        for i in range(1, len(init_p_latlong)):
+            wpt = fn.nm_to_latlong(CENTER, self.wpts[i])
+            init_pos = init_p_latlong[i]
+            hdg = fn.get_hdg(init_pos, wpt)
+            bs.traf.cre(acid=str(i), actype=AC_TYPE, aclat=init_pos[0], aclon=init_pos[1], achdg=hdg, acspd=AC_SPD, acalt=ALTITUDE)
+    
+    def _get_info(self):
+        # Here you implement any additional info that you want to log after an episode
+        return {
+            'total_reward': self.total_reward,
+            'total_intrusions': self.total_intrusions,
+            'average_drift': self.average_drift.mean()
+        }
+    
+    def _get_reward(self):
+        
+        drift_reward = self._check_drift()
+        intrusion_reward = self._check_intrusion()
+
+        total_reward = drift_reward + intrusion_reward
+        self.total_reward += total_reward
+
+        return total_reward
+    
+    def _get_obs(self):
+        ac_idx = bs.traf.id2idx(self.agent)
+
+        # raw drift retained for _check_drift (approach C)
+        wpts = fn.nm_to_latlong(CENTER, self.wpts[ac_idx])
+        wpt_qdr, _ = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], wpts[0], wpts[1])
+        self.drift = fn.bound_angle_positive_negative_180(bs.traf.hdg[ac_idx] - wpt_qdr)
+
+        return {
+            **self.drift_obs.observe(self.agent, wpt_qdr),
+            **self.airspeed_obs.observe(self.agent),
+            **self.intruder_obs.observe(self.agent),
+        }
+    
+    def _get_action(self, action):
+        self.heading_action.execute(self.agent, action[0])
+        self.speed_action.execute(self.agent, action[1])
+
+    def _check_drift(self):
+        drift = abs(np.deg2rad(self.drift))
+        self.average_drift = np.append(self.average_drift, drift)
+        return drift * DRIFT_PENALTY
+    
+    def _check_intrusion(self):
+        ac_idx = bs.traf.id2idx(self.agent)
+        reward = 0
+        for i in range(self.num_ac-1):
+            int_idx = i+1
+            _, int_dis = bs.tools.geo.kwikqdrdist(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx], bs.traf.lat[int_idx], bs.traf.lon[int_idx])
+            if int_dis < INTRUSION_DISTANCE:
+                self.total_intrusions += 1
+                reward += INTRUSION_PENALTY
+        
+        return reward
+        
+    def _render_frame(self):
+        ac_idx = bs.traf.id2idx(self.agent)
+        canvas = self.pygame_canvas.begin_frame()
+
+        # Draw airspace polygon
+        poly_coords = [
+            self.projection.project(*fn.nm_to_latlong(CENTER, pt))
+            for pt in self.poly_points
+        ]
+        draw_polygon(canvas, poly_coords, color=(255, 0, 0), filled=False, width=2)
+
+        # Draw ownship
+        x, y = self.projection.project(bs.traf.lat[ac_idx], bs.traf.lon[ac_idx])
+        draw_aircraft(canvas, x, y, bs.traf.hdg[ac_idx],
+                      body_km=3, heading_km=10, projection=self.projection)
+
+        # Draw intruders
+        for i in range(self.num_ac - 1):
+            int_idx = i + 1
+            ix, iy = self.projection.project(bs.traf.lat[int_idx], bs.traf.lon[int_idx])
+            separation = bs.tools.geo.kwikdist(
+                bs.traf.lat[ac_idx], bs.traf.lon[ac_idx],
+                bs.traf.lat[int_idx], bs.traf.lon[int_idx])
+            draw_intruder(canvas, ix, iy, bs.traf.hdg[int_idx], self.projection,
+                          body_km=2, heading_km=5,
+                          safety_radius_km=INTRUSION_DISTANCE * NM2KM,
+                          in_intrusion=separation < INTRUSION_DISTANCE)
+
+        self.pygame_canvas.end_frame(canvas)
+    
+    def close(self):
+        bs.stack.stack('quit')
