@@ -42,6 +42,8 @@ iCloud-synced Documents folder, and the editable install of bluesky-gym then fai
 
 ## Train
 
+Every terminal command, in order, is also in `tutorial.txt`.
+
 ```bash
 python -m single_agent.Training.train --steps 1e6 --name ppo
 python -m multi_agent.Training.train --steps 5e6 --name mappo
