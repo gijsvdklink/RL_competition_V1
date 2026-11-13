@@ -14,7 +14,7 @@ environments, with our observation, action and reward on their hooks.
 | **Reward** | Purely negative. −10 per new loss of separation, restricted-area entry or sector exit; −5/300 time and −12/300·(1 − cos drift) per decision (`Docs/reward_function.pdf`). |
 | **Training termination** | A new violation ends the episode, as a collision does in the repo. Evaluation uses the competition's standard rules. |
 | **Network** | The repo's CNN + MLP encoder, with 128-128 heads. The actor sees its own observation only. The critic adds attention over every aircraft's state (centralised training, decentralised execution). |
-| **PPO** | 1 environment, a 1000-sample rollout as one batch, 30 epochs (target_kl 0.02), γ 0.98, lr 5e-4, VecNormalize on observations and rewards |
+| **PPO** | 8 environments (as the repo), a ~1000-sample rollout as one batch, 30 epochs (target_kl 0.02), γ 0.98, lr 5e-4, VecNormalize on observations and rewards |
 
 ## Layout
 

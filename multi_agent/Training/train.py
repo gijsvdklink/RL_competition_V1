@@ -2,7 +2,7 @@
 
 All 10 aircraft share one decentralised actor and one centralised critic (Shared/policy.py).
 Every aircraft is a sub-env of ZooVecEnv (multi_agent/Training/vec_env.py), so --steps counts
-aircraft decisions, and a rollout of 100 decisions per aircraft fills the buffer of 1000.
+aircraft decisions; 8 env copies x 10 aircraft x 12 decisions fill the buffer of 960.
 The settings, KPIs and outputs are in Shared/training.py.
 
 Run from RL_COMPETITION_V2/:
@@ -52,7 +52,7 @@ def validation(cfg):
 def main():
     args = parse_args(__doc__, default_steps=5e6)
     cfg = CONFIG
-    venv = ZooVecEnv(partial(make_env, cfg), n_envs=1)
+    venv = ZooVecEnv(partial(make_env, cfg), args.n_envs)
     policy_kwargs = dict(
         features_extractor_class=CTDEFeatures,
         features_extractor_kwargs=dict(n_rays=cfg['n_rays'], history_length=cfg['history_length']),

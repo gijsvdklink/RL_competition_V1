@@ -4,10 +4,11 @@ Both train with Stable-Baselines3 PPO in the competition's own BlueSky environme
 Training episodes end on a new violation (CONFIG terminate_on_violation); the evaluation
 episodes and the official harness keep the competition's rules. The update schedule:
 
-    one environment       in its own process: the evaluation environment lives in the main
-                          one, and BlueSky can only run once per process
-    rollout of 1000       samples: 1000 decisions of the single agent, or 100 decisions of
-                          each of the 10 aircraft in the multi-agent env
+    8 environments        as navigation-mappo-rl's 8 env copies (--n-envs), each in its own
+                          process: BlueSky can only run once per process, and the evaluation
+                          environment lives in the main one
+    rollout of ~1000      samples, split over the envs: 8 x 125 decisions of the single agent,
+                          or 8 x 10 aircraft x 12 decisions (960) in the multi-agent env
     batch = the rollout   the whole rollout buffer is one batch
     30 epochs             stopped early once the policy has moved by target_kl 0.02
 
@@ -76,6 +77,7 @@ METRIC_KEYS = ('total_reward', 'flight_time', 'waypoint_reached',
 def parse_args(doc, default_steps):
     parser = argparse.ArgumentParser(description=doc, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--steps', type=float, default=default_steps)
+    parser.add_argument('--n-envs', type=int, default=8, help='env copies, each in its own process')
     parser.add_argument('--net-width', type=int, default=128, help='neurons per layer of the 2-layer heads')
     parser.add_argument('--seed', type=int, default=0)
     parser.add_argument('--name', default=None)
@@ -103,7 +105,8 @@ def train(kind, args, cfg, venv, policy, policy_kwargs, evaluate):
     """Train one run: kind is 'sa' or 'ma', evaluate(model, n) returns a dict of KPIs over n
     validation episodes."""
     torch.set_num_threads(2)
-    settings = {**SETTINGS, 'n_steps': ROLLOUT_SAMPLES // venv.num_envs, 'batch_size': ROLLOUT_SAMPLES}
+    n_steps = max(1, ROLLOUT_SAMPLES // venv.num_envs)
+    settings = {**SETTINGS, 'n_steps': n_steps, 'batch_size': n_steps * venv.num_envs}
     run_dir = Path('Models') / kind / (args.name or f'seed{args.seed}')
     run_dir.mkdir(parents=True, exist_ok=True)
 
@@ -119,7 +122,7 @@ def train(kind, args, cfg, venv, policy, policy_kwargs, evaluate):
     venv.seed(TRAINING_SEEDS * (args.seed + 1) + model.num_timesteps)
     used = {key: getattr(model, key) for key in ('n_steps', 'batch_size', 'n_epochs')}
     (run_dir / 'config.json').write_text(json.dumps(
-        {'cfg': cfg, 'settings': {**settings, **used}}, indent=2))
+        {'cfg': cfg, 'settings': {**settings, **used}, 'n_envs': args.n_envs}, indent=2))
 
     callbacks = [CheckpointCallback(max(1, SAVE_EVERY // venv.num_envs), str(run_dir / 'checkpoints'),
                                     save_vecnormalize=True),

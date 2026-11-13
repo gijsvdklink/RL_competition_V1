@@ -44,7 +44,7 @@ def validation(cfg):
 def main():
     args = parse_args(__doc__, default_steps=1e6)
     cfg = CONFIG
-    venv = SubprocVecEnv([partial(make_env, cfg)], start_method='spawn')
+    venv = SubprocVecEnv([partial(make_env, cfg) for _ in range(args.n_envs)], start_method='spawn')
     policy_kwargs = dict(
         features_extractor_class=CTDEFeatures,
         features_extractor_kwargs=dict(n_rays=cfg['n_rays'], history_length=cfg['history_length']),
