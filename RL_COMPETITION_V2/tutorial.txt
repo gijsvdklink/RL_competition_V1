@@ -1,0 +1,59 @@
+# --- once: install --------------------------------------------------------------------------
+# bluesky-gym must sit next to this folder, on the competition branch
+cd "/Users/gijsvdklink/Documents/Gijs/RL competition"
+git clone --branch AI4REAL-NET-Competition https://github.com/TUDelft-CNS-ATM/bluesky-gym.git
+cd RL_COMPETITION_V2
+UV_PROJECT_ENVIRONMENT=~/.venvs/competition-rl uv sync
+
+
+# --- every terminal: start here ---------------------------------------------------------------
+cd "/Users/gijsvdklink/Documents/Gijs/RL competition/RL_COMPETITION_V2"
+source ~/.venvs/competition-rl/bin/activate
+
+
+# --- clear old runs (stop running trainings first with Ctrl+C) ------------------------------
+rm -rf Models Results
+
+
+# --- training: each run starts 8 BlueSky processes ---------------------------------------------
+# terminal 1: single agent
+python -m single_agent.Training.train --steps 1e6 --name ppo
+
+# terminal 2: multi agent
+python -m multi_agent.Training.train --steps 5e6 --name mappo
+
+# both at once on 6 cores: give each fewer environments instead
+python -m single_agent.Training.train --steps 1e6 --name ppo --n-envs 4
+python -m multi_agent.Training.train --steps 5e6 --name mappo --n-envs 4
+
+# a second seed
+python -m single_agent.Training.train --steps 1e6 --name ppo_seed1 --seed 1
+
+# continue a stopped run from a checkpoint, into a new run folder
+python -m single_agent.Training.train --steps 1e6 --name ppo_resumed --resume Models/sa/ppo/checkpoints/rl_model_500000_steps.zip
+
+
+# --- tensorboard: then open http://localhost:6007 --------------------------------------------
+python -m tensorboard.main --logdir Models --port 6007
+
+
+# --- evaluation with the official harness, seed 42, standard rules -----------------------------
+# single agent, the official 1000 episodes; --episodes 50 for a quick look
+python -m single_agent.Validation.evaluate --model Models/sa/ppo/best_model.zip
+python -m single_agent.Validation.evaluate --model Models/sa/ppo/best_model.zip --episodes 50
+
+# multi agent
+python -m multi_agent.Validation.evaluate --model Models/ma/mappo/best_model.zip
+python -m multi_agent.Validation.evaluate --model Models/ma/mappo/best_model.zip --episodes 50
+
+# the fly-straight baseline, for comparison
+python -m single_agent.Validation.evaluate --episodes 50
+python -m multi_agent.Validation.evaluate --episodes 50
+
+
+# --- GIFs with the observations drawn in, written to Results/ ---------------------------------
+python -m single_agent.Visualisation.visualise --model Models/sa/ppo/best_model.zip --seeds 1 2 3 4 5
+python -m multi_agent.Visualisation.visualise --model Models/ma/mappo/best_model.zip --seeds 1 2 3 4 5
+
+# the fly-straight baseline
+python -m single_agent.Visualisation.visualise --seeds 42

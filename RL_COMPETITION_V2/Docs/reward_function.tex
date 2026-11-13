@@ -1,0 +1,27 @@
+\documentclass[11pt]{article}
+\usepackage[a4paper, margin=2.5cm]{geometry}
+\usepackage{amsmath}
+\pagestyle{empty}
+
+\begin{document}
+
+\section*{Reward function}
+
+\begin{equation}
+r_t = -\left( w_1 x_{1,t} + w_2 x_{2,t} + w_3 x_{3,t} + w_4 + w_5 \left(1 - \cos \psi_t\right) \right)
+\end{equation}
+
+\noindent where, for decision step $t$ ($10$~s):
+\begin{itemize}
+    \item $x_{1,t} \in \{0,1\}$ is $1$ if a new loss of separation ($< 5$~NM) started during the step, with $w_1 = 10$;
+    \item $x_{2,t} \in \{0,1\}$ is $1$ if the aircraft newly entered a restricted area, with $w_2 = 10$;
+    \item $x_{3,t} \in \{0,1\}$ is $1$ if the aircraft newly left the sector, with $w_3 = 10$;
+    \item $w_4 = 5/300$ is a time penalty per decision, $-5$ over a full $3000$~s episode;
+    \item $\psi_t$ is the angle between the aircraft's heading and the bearing to its goal at the end of the step, with $w_5 = 12/300$.
+\end{itemize}
+
+\noindent In training, a new violation ($x_{1,t}$, $x_{2,t}$ or $x_{3,t}$) also ends the episode. In evaluation the competition's rules apply and nothing ends early. The reward is never positive.
+
+\noindent The weights balance two failures in PPO's discounted view ($\gamma = 0.98$, a horizon of about $50$ decisions). Circling forever costs $2.8$ against $0.7$ for flying to the goal, so the agent goes even when that is up to $21\%$ riskier. The worst way to keep flying costs $4.8$, half of a violation, so ending the episode by a violation never pays.
+
+\end{document}
