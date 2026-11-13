@@ -27,11 +27,13 @@ environments, with our observation, action and reward on their hooks.
 
 ## Install
 
-The competition code must sit next to this repository, on its competition branch:
+This folder lives in the [RL_competition_V1](https://github.com/gijsvdklink/RL_competition_V1)
+repository. The competition code must sit next to it, on its competition branch:
 
 ```bash
+git clone https://github.com/gijsvdklink/RL_competition_V1.git
+cd RL_competition_V1
 git clone --branch AI4REAL-NET-Competition https://github.com/TUDelft-CNS-ATM/bluesky-gym.git
-git clone --branch v2 https://github.com/gijsvdklink/RL_competition_V1.git RL_COMPETITION_V2
 cd RL_COMPETITION_V2
 UV_PROJECT_ENVIRONMENT=~/.venvs/competition-rl uv sync
 source ~/.venvs/competition-rl/bin/activate
